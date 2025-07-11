@@ -1,0 +1,439 @@
+name: Security Vulnerability Scan
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: 'Type of security scan'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - dependencies
+          - code
+          - containers
+          - infrastructure
+
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+
+jobs:
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Cache Python packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-security-${{ hashFiles('backend/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-security-
+      
+      - name: Cache Node modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/node_modules
+            mobile/node_modules
+          key: ${{ runner.os }}-node-security-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-security-
+      
+      - name: Install Python dependencies and tools
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install safety pip-audit bandit
+      
+      - name: Install Node.js dependencies
+        run: |
+          if [ -d "frontend" ]; then
+            cd frontend && npm ci
+          fi
+          if [ -d "mobile" ]; then
+            cd mobile && npm ci
+          fi
+          npm install -g retire @microsoft/rush
+      
+      - name: Python Safety Check
+        run: |
+          cd backend
+          safety check --json --output safety-report.json || true
+          safety check || true
+        continue-on-error: true
+      
+      - name: Python pip-audit
+        run: |
+          cd backend
+          pip-audit --format=json --output=pip-audit-report.json || true
+          pip-audit || true
+        continue-on-error: true
+      
+      - name: Python Bandit Security Lint
+        run: |
+          cd backend
+          bandit -r app/ -f json -o bandit-report.json || true
+          bandit -r app/ -ll || true
+        continue-on-error: true
+      
+      - name: Frontend npm audit
+        if: hashFiles('frontend/package.json') != ''
+        run: |
+          cd frontend
+          npm audit --audit-level moderate --json > npm-audit-frontend.json || true
+          npm audit --audit-level moderate || true
+        continue-on-error: true
+      
+      - name: Mobile npm audit
+        if: hashFiles('mobile/package.json') != ''
+        run: |
+          cd mobile
+          npm audit --audit-level moderate --json > npm-audit-mobile.json || true
+          npm audit --audit-level moderate || true
+        continue-on-error: true
+      
+      - name: Retire.js scan
+        run: |
+          if [ -d "frontend" ]; then
+            cd frontend && retire --js --outputformat json --outputpath retire-frontend.json || true
+          fi
+          if [ -d "mobile" ]; then
+            cd mobile && retire --js --outputformat json --outputpath retire-mobile.json || true
+          fi
+        continue-on-error: true
+      
+      - name: Upload vulnerability reports
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: dependency-vulnerability-reports
+          path: |
+            backend/*-report.json
+            frontend/npm-audit-*.json
+            frontend/retire-*.json
+            mobile/npm-audit-*.json
+            mobile/retire-*.json
+          retention-days: 30
+      
+      - name: Run comprehensive dependency scan
+        run: |
+          chmod +x scripts/dependency-scanner.sh
+          ./scripts/dependency-scanner.sh ${{ github.ref_name == 'main' && 'production' || 'development' }}
+        continue-on-error: true
+      
+      - name: Upload dependency scan results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: dependency-scan-results
+          path: logs/security/
+          retention-days: 30
+
+  code-security-scan:
+    name: Code Security Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install security tools
+        run: |
+          pip install bandit semgrep
+          npm install -g eslint-plugin-security
+      
+      - name: Run Bandit
+        run: |
+          cd backend
+          bandit -r app/ -f json -o bandit-detailed.json || true
+          bandit -r app/ -ll || true
+        continue-on-error: true
+      
+      - name: Run Semgrep
+        run: |
+          semgrep --config=auto --json --output=semgrep-results.json || true
+          semgrep --config=auto || true
+        continue-on-error: true
+      
+      - name: Secret Detection with GitLeaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        continue-on-error: true
+      
+      - name: Upload code security results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: code-security-results
+          path: |
+            backend/bandit-detailed.json
+            semgrep-results.json
+            results.sarif
+          retention-days: 30
+
+  container-security-scan:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'containers' || github.event.inputs.scan_type == 'all' || github.event_name == 'schedule'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build backend image for scanning
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          load: true
+          tags: quest-backend:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Build frontend image for scanning
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          load: true
+          tags: quest-frontend:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Run Trivy vulnerability scanner on backend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'quest-backend:scan'
+          format: 'sarif'
+          output: 'trivy-backend-results.sarif'
+        continue-on-error: true
+      
+      - name: Run Trivy vulnerability scanner on frontend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'quest-frontend:scan'
+          format: 'sarif'
+          output: 'trivy-frontend-results.sarif'
+        continue-on-error: true
+      
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: '.'
+        continue-on-error: true
+      
+      - name: Upload container scan results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: container-security-results
+          path: |
+            trivy-*-results.sarif
+          retention-days: 30
+
+  infrastructure-security-scan:
+    name: Infrastructure Security Scan
+    runs-on: ubuntu-latest
+    if: github.event.inputs.scan_type == 'infrastructure' || github.event.inputs.scan_type == 'all' || github.event_name == 'schedule'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run tfsec for Terraform
+        if: hashFiles('infrastructure/terraform/**/*.tf') != ''
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          soft_fail: true
+          format: sarif
+          sarif_file: tfsec-results.sarif
+        continue-on-error: true
+      
+      - name: Scan Kubernetes manifests with kubesec
+        if: hashFiles('infrastructure/kubernetes/**/*.yaml') != ''
+        run: |
+          curl -sSX POST --data-binary @infrastructure/kubernetes/production-values.yaml https://v2.kubesec.io/scan > kubesec-results.json || true
+        continue-on-error: true
+      
+      - name: Docker Compose security check
+        run: |
+          # Check for security issues in docker-compose files
+          echo "Checking Docker Compose security..."
+          grep -r "privileged.*true" docker-compose*.yml && echo "WARNING: Privileged containers found" || echo "OK: No privileged containers"
+          grep -r "network_mode.*host" docker-compose*.yml && echo "WARNING: Host network mode found" || echo "OK: No host network mode"
+          grep -r "/var/run/docker.sock" docker-compose*.yml && echo "WARNING: Docker socket mounted" || echo "OK: No Docker socket mounts"
+        continue-on-error: true
+      
+      - name: Upload infrastructure scan results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: infrastructure-security-results
+          path: |
+            tfsec-results.sarif
+            kubesec-results.json
+          retention-days: 30
+
+  security-report:
+    name: Generate Security Report
+    runs-on: ubuntu-latest
+    needs: [dependency-scan, code-security-scan, container-security-scan, infrastructure-security-scan]
+    if: always()
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        continue-on-error: true
+      
+      - name: Install jq for JSON processing
+        run: sudo apt-get update && sudo apt-get install -y jq
+      
+      - name: Generate consolidated security report
+        run: |
+          mkdir -p security-reports
+          
+          # Create summary report
+          cat > security-reports/security-summary.json << EOF
+          {
+            "scan_timestamp": "$(date -Iseconds)",
+            "github_ref": "${{ github.ref }}",
+            "github_sha": "${{ github.sha }}",
+            "workflow_run_id": "${{ github.run_id }}",
+            "scans_completed": {
+              "dependency_scan": "${{ needs.dependency-scan.result }}",
+              "code_security_scan": "${{ needs.code-security-scan.result }}",
+              "container_security_scan": "${{ needs.container-security-scan.result }}",
+              "infrastructure_security_scan": "${{ needs.infrastructure-security-scan.result }}"
+            }
+          }
+          EOF
+          
+          # Count vulnerabilities from all sources
+          TOTAL_VULNS=0
+          HIGH_VULNS=0
+          MEDIUM_VULNS=0
+          LOW_VULNS=0
+          
+          # Process dependency scan results
+          if [ -f "dependency-scan-results/dependency-vulnerability-report-*.json" ]; then
+            DEP_REPORT=$(ls dependency-scan-results/dependency-vulnerability-report-*.json | head -1)
+            if [ -f "$DEP_REPORT" ]; then
+              DEP_TOTAL=$(jq '.summary.total_vulnerabilities' "$DEP_REPORT" 2>/dev/null || echo 0)
+              DEP_HIGH=$(jq '.summary.high_severity' "$DEP_REPORT" 2>/dev/null || echo 0)
+              DEP_MEDIUM=$(jq '.summary.medium_severity' "$DEP_REPORT" 2>/dev/null || echo 0)
+              DEP_LOW=$(jq '.summary.low_severity' "$DEP_REPORT" 2>/dev/null || echo 0)
+              
+              TOTAL_VULNS=$((TOTAL_VULNS + DEP_TOTAL))
+              HIGH_VULNS=$((HIGH_VULNS + DEP_HIGH))
+              MEDIUM_VULNS=$((MEDIUM_VULNS + DEP_MEDIUM))
+              LOW_VULNS=$((LOW_VULNS + DEP_LOW))
+            fi
+          fi
+          
+          # Update summary with totals
+          jq --arg total "$TOTAL_VULNS" \
+             --arg high "$HIGH_VULNS" \
+             --arg medium "$MEDIUM_VULNS" \
+             --arg low "$LOW_VULNS" \
+             '. + {
+               "vulnerability_summary": {
+                 "total": ($total | tonumber),
+                 "high": ($high | tonumber),
+                 "medium": ($medium | tonumber),
+                 "low": ($low | tonumber)
+               }
+             }' security-reports/security-summary.json > security-reports/security-summary.tmp && \
+             mv security-reports/security-summary.tmp security-reports/security-summary.json
+          
+          echo "Security scan completed. Summary:"
+          cat security-reports/security-summary.json
+      
+      - name: Upload consolidated security report
+        uses: actions/upload-artifact@v3
+        with:
+          name: consolidated-security-report
+          path: security-reports/
+          retention-days: 90
+      
+      - name: Comment on PR with security summary
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'security-reports/security-summary.json';
+            
+            if (fs.existsSync(path)) {
+              const summary = JSON.parse(fs.readFileSync(path, 'utf8'));
+              const vulns = summary.vulnerability_summary || { total: 0, high: 0, medium: 0, low: 0 };
+              
+              const comment = `## 🔒 Security Scan Results
+              
+              | Severity | Count |
+              |----------|-------|
+              | 🚨 High | ${vulns.high} |
+              | ⚠️ Medium | ${vulns.medium} |
+              | ℹ️ Low | ${vulns.low} |
+              | **Total** | **${vulns.total}** |
+              
+              ${vulns.high > 0 ? '🚨 **High severity vulnerabilities found! Immediate attention required.**' : ''}
+              ${vulns.medium > 5 ? '⚠️ **Multiple medium severity issues detected.**' : ''}
+              ${vulns.total === 0 ? '✅ **No security vulnerabilities detected!**' : ''}
+              
+              View detailed reports in the workflow artifacts.
+              `;
+              
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: comment
+              });
+            }
+      
+      - name: Fail workflow if high severity vulnerabilities found
+        run: |
+          if [ -f "security-reports/security-summary.json" ]; then
+            HIGH_VULNS=$(jq '.vulnerability_summary.high // 0' security-reports/security-summary.json)
+            if [ "$HIGH_VULNS" -gt 0 ]; then
+              echo "❌ High severity vulnerabilities found: $HIGH_VULNS"
+              echo "Security scan failed - immediate attention required"
+              exit 1
+            fi
+          fi

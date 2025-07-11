@@ -1,0 +1,166 @@
+# Helm values for production environment
+
+global:
+  environment: production
+  domain: educational-rpg.com
+  
+replicaCount:
+  backend: 3
+  frontend: 3
+
+image:
+  backend:
+    repository: your-registry/educational-rpg-backend
+    tag: latest
+    pullPolicy: Always
+  frontend:
+    repository: your-registry/educational-rpg-frontend
+    tag: latest
+    pullPolicy: Always
+
+service:
+  type: ClusterIP
+  backend:
+    port: 8000
+  frontend:
+    port: 80
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+  hosts:
+    - host: api.educational-rpg.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: backend
+    - host: educational-rpg.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: frontend
+  tls:
+    - secretName: educational-rpg-tls
+      hosts:
+        - educational-rpg.com
+        - api.educational-rpg.com
+
+resources:
+  backend:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  frontend:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "200m"
+
+autoscaling:
+  enabled: true
+  backend:
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  frontend:
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+
+postgresql:
+  enabled: false
+  external:
+    host: your-rds-endpoint.amazonaws.com
+    port: 5432
+    database: educational_rpg
+    existingSecret: educational-rpg-db-secret
+
+redis:
+  enabled: false
+  external:
+    host: your-elasticache-endpoint.amazonaws.com
+    port: 6379
+    existingSecret: educational-rpg-redis-secret
+
+secrets:
+  backend:
+    secretKey: ""  # Set via sealed-secrets
+    jwtSecretKey: ""
+    encryptionKey: ""
+    openaiApiKey: ""
+    stripeApiKey: ""
+    stripeWebhookSecret: ""
+    sentryDsn: ""
+
+configMap:
+  backend:
+    ENVIRONMENT: production
+    LOG_LEVEL: info
+    CORS_ORIGINS: '["https://educational-rpg.com"]'
+    RATE_LIMIT_PER_MINUTE: "60"
+    ENABLE_AI_TUTOR: "true"
+    ENABLE_PAYMENT: "true"
+  frontend:
+    VITE_API_URL: https://api.educational-rpg.com/api/v1
+    VITE_WEBSOCKET_URL: wss://api.educational-rpg.com/ws
+    VITE_ENVIRONMENT: production
+
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+  grafana:
+    enabled: true
+    dashboards:
+      enabled: true
+
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  retention: 30
+
+healthcheck:
+  backend:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 3
+  frontend:
+    enabled: true
+    path: /
+    initialDelaySeconds: 10
+    periodSeconds: 10
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - educational-rpg-backend
+          topologyKey: kubernetes.io/hostname

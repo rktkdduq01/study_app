@@ -1,0 +1,33 @@
+{
+  "app": {
+    "title": "EduRPG",
+    "loading": "Loading..."
+  },
+  "button": {
+    "submit": "Submit",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "back": "Back",
+    "next": "Next",
+    "previous": "Previous",
+    "close": "Close",
+    "confirm": "Confirm"
+  },
+  "nav": {
+    "home": "Home",
+    "dashboard": "Dashboard",
+    "profile": "Profile",
+    "settings": "Settings",
+    "logout": "Logout",
+    "login": "Login",
+    "register": "Register"
+  },
+  "message": {
+    "success": "Success!",
+    "error": "An error occurred",
+    "warning": "Warning",
+    "info": "Information"
+  }
+}

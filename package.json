@@ -1,0 +1,39 @@
+{
+  "name": "educational-rpg-platform",
+  "version": "1.0.0",
+  "description": "Educational RPG Platform with AI Tutor",
+  "private": true,
+  "scripts": {
+    "test": "npm run test:backend && npm run test:frontend",
+    "test:backend": "cd backend && python run_tests.py",
+    "test:frontend": "cd frontend && npm test",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:headed": "playwright test --headed",
+    "playwright:install": "playwright install --with-deps",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && uvicorn app.main:app --reload",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "npm run build:frontend",
+    "build:frontend": "cd frontend && npm run build",
+    "build:production": "npm run remove-console && npm run build",
+    "lint": "npm run lint:backend && npm run lint:frontend",
+    "lint:backend": "cd backend && ruff check .",
+    "lint:frontend": "cd frontend && npm run lint",
+    "lint:production": "npm run lint:production:frontend && npm run lint:production:mobile",
+    "lint:production:frontend": "cd frontend && eslint --config .eslintrc.production.json src/",
+    "lint:production:mobile": "cd mobile && eslint --config .eslintrc.production.json src/",
+    "remove-console": "node scripts/remove-console.js all",
+    "remove-console:frontend": "node scripts/remove-console.js frontend",
+    "remove-console:mobile": "node scripts/remove-console.js mobile"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "concurrently": "^8.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}

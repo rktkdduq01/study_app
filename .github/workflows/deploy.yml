@@ -1,0 +1,268 @@
+name: Deploy Pipeline
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  DOCKER_REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/quest-edu
+
+jobs:
+  # Build and push Docker images
+  build-and-push:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Determine version
+        id: version
+        run: |
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION=sha-${GITHUB_SHA::8}
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+      
+      - name: Build and push Backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_PREFIX }}-backend:${{ steps.version.outputs.version }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_PREFIX }}-backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.version.outputs.version }}
+      
+      - name: Build and push Frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_PREFIX }}-frontend:${{ steps.version.outputs.version }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_PREFIX }}-frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.version.outputs.version }}
+            VITE_API_URL=${{ secrets.PRODUCTION_API_URL }}
+            VITE_WEBSOCKET_URL=${{ secrets.PRODUCTION_WS_URL }}
+
+  # Deploy to Staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: staging
+      url: https://staging.quest-edu.com
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+      
+      - name: Deploy to staging server
+        env:
+          VERSION: ${{ needs.build-and-push.outputs.version }}
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }} << 'EOF'
+            cd /opt/quest-edu
+            git pull origin main
+            
+            # Update .env with new version
+            sed -i "s/VERSION=.*/VERSION=${{ env.VERSION }}/" .env
+            
+            # Pull new images
+            docker-compose -f docker-compose.yml -f docker-compose.staging.yml pull
+            
+            # Deploy with zero downtime
+            docker-compose -f docker-compose.yml -f docker-compose.staging.yml up -d --no-deps --scale backend=2 backend
+            sleep 30
+            docker-compose -f docker-compose.yml -f docker-compose.staging.yml up -d --no-deps frontend nginx
+            
+            # Run migrations
+            docker-compose -f docker-compose.yml -f docker-compose.staging.yml exec -T backend alembic upgrade head
+            
+            # Health check
+            ./scripts/health-check.sh staging
+          EOF
+      
+      - name: Run smoke tests
+        run: |
+          npm install -g newman
+          newman run tests/postman/staging-smoke-tests.json \
+            --environment tests/postman/staging-env.json \
+            --reporters cli,json \
+            --reporter-json-export staging-test-results.json
+      
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: staging-test-results
+          path: staging-test-results.json
+
+  # Deploy to Production
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build-and-push, deploy-staging]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: production
+      url: https://quest-edu.com
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.PRODUCTION_SSH_KEY }}
+      
+      - name: Create backup
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.PRODUCTION_USER }}@${{ secrets.PRODUCTION_HOST }} << 'EOF'
+            cd /opt/quest-edu
+            ./scripts/backup.sh production
+          EOF
+      
+      - name: Deploy to production servers
+        env:
+          VERSION: ${{ needs.build-and-push.outputs.version }}
+        run: |
+          # Deploy to multiple production servers
+          for server in ${{ secrets.PRODUCTION_HOSTS }}; do
+            ssh -o StrictHostKeyChecking=no ${{ secrets.PRODUCTION_USER }}@${server} << 'EOF'
+              cd /opt/quest-edu
+              git fetch --tags
+              git checkout ${{ github.ref_name }}
+              
+              # Update .env with new version
+              sed -i "s/VERSION=.*/VERSION=${{ env.VERSION }}/" .env.production
+              
+              # Pull new images
+              docker-compose -f docker-compose.yml -f docker-compose.prod.yml pull
+              
+              # Rolling deployment
+              docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-deps --scale backend=4 backend
+              sleep 60
+              
+              # Update frontend and nginx
+              docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-deps frontend
+              docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-deps nginx
+              
+              # Run migrations (only on first server)
+              if [ "${server}" == "${{ secrets.PRODUCTION_HOST_PRIMARY }}" ]; then
+                docker-compose -f docker-compose.yml -f docker-compose.prod.yml exec -T backend alembic upgrade head
+              fi
+              
+              # Health check
+              ./scripts/health-check.sh production
+            EOF
+          done
+      
+      - name: Run production smoke tests
+        run: |
+          npm install -g newman
+          newman run tests/postman/production-smoke-tests.json \
+            --environment tests/postman/production-env.json \
+            --reporters cli,json \
+            --reporter-json-export production-test-results.json
+      
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          body: |
+            ## Changes in this release
+            - Backend: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_PREFIX }}-backend:${{ needs.build-and-push.outputs.version }}
+            - Frontend: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_PREFIX }}-frontend:${{ needs.build-and-push.outputs.version }}
+            
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+          files: |
+            production-test-results.json
+      
+      - name: Notify deployment
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: |
+            Production deployment ${{ needs.build-and-push.outputs.version }} completed!
+            URL: https://quest-edu.com
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        if: always()
+
+  # Rollback job (manual trigger)
+  rollback:
+    name: Rollback Deployment
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    environment:
+      name: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets[format('{0}_SSH_KEY', github.event.inputs.environment)] }}
+      
+      - name: Perform rollback
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets[format('{0}_USER', github.event.inputs.environment)] }}@${{ secrets[format('{0}_HOST', github.event.inputs.environment)] }} << 'EOF'
+            cd /opt/quest-edu
+            ./scripts/rollback.sh ${{ github.event.inputs.environment }}
+          EOF
+      
+      - name: Notify rollback
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: |
+            Rollback completed for ${{ github.event.inputs.environment }}!
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}

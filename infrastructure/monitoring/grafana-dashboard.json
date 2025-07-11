@@ -1,0 +1,254 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "educational-rpg-prod",
+    "title": "Educational RPG Platform - Production",
+    "tags": ["production", "educational-rpg"],
+    "timezone": "browser",
+    "schemaVersion": 30,
+    "version": 1,
+    "refresh": "30s",
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    },
+    "panels": [
+      {
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "id": 1,
+        "title": "Service Health",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "up{job=~\"educational-rpg-.*\"}",
+            "legendFormat": "{{job}}"
+          }
+        ],
+        "options": {
+          "orientation": "auto",
+          "textMode": "auto",
+          "colorMode": "value",
+          "graphMode": "area",
+          "justifyMode": "auto"
+        }
+      },
+      {
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "id": 2,
+        "title": "Request Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "sum(rate(http_requests_total[5m])) by (service)",
+            "legendFormat": "{{service}}"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "reqps",
+            "show": true
+          },
+          {
+            "show": false
+          }
+        ]
+      },
+      {
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "id": 3,
+        "title": "Error Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) by (service)",
+            "legendFormat": "{{service}} 5xx"
+          },
+          {
+            "expr": "sum(rate(http_requests_total{status=~\"4..\"}[5m])) by (service)",
+            "legendFormat": "{{service}} 4xx"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "reqps",
+            "show": true
+          },
+          {
+            "show": false
+          }
+        ],
+        "alert": {
+          "conditions": [
+            {
+              "evaluator": {
+                "params": [0.1],
+                "type": "gt"
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": ["A", "5m", "now"]
+              },
+              "reducer": {
+                "params": [],
+                "type": "avg"
+              },
+              "type": "query"
+            }
+          ],
+          "executionErrorState": "alerting",
+          "for": "5m",
+          "noDataState": "no_data",
+          "notifications": []
+        }
+      },
+      {
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "id": 4,
+        "title": "Response Time (p95)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (service, le))",
+            "legendFormat": "{{service}}"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "s",
+            "show": true
+          },
+          {
+            "show": false
+          }
+        ]
+      },
+      {
+        "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
+        "id": 5,
+        "title": "CPU Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(process_cpu_seconds_total[5m]) * 100",
+            "legendFormat": "{{job}} - {{instance}}"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "percent",
+            "show": true,
+            "max": 100
+          },
+          {
+            "show": false
+          }
+        ]
+      },
+      {
+        "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
+        "id": 6,
+        "title": "Memory Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "process_resident_memory_bytes / (1024 * 1024)",
+            "legendFormat": "{{job}} - {{instance}}"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "decmbytes",
+            "show": true
+          },
+          {
+            "show": false
+          }
+        ]
+      },
+      {
+        "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
+        "id": 7,
+        "title": "Active Connections",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "websocket_connections_active",
+            "legendFormat": "WebSocket"
+          },
+          {
+            "expr": "database_connection_pool_size - database_connection_pool_available",
+            "legendFormat": "Database"
+          },
+          {
+            "expr": "redis_connected_clients",
+            "legendFormat": "Redis"
+          }
+        ]
+      },
+      {
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+        "id": 8,
+        "title": "Business Metrics",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "active_users_total",
+            "legendFormat": "Active Users"
+          },
+          {
+            "expr": "sum(rate(learning_sessions_created_total[1h]))",
+            "legendFormat": "Sessions/hour"
+          },
+          {
+            "expr": "sum(rate(achievements_unlocked_total[1h]))",
+            "legendFormat": "Achievements/hour"
+          }
+        ]
+      },
+      {
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+        "id": 9,
+        "title": "AI Tutor Performance",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(ai_tutor_requests_total[5m])",
+            "legendFormat": "Requests/sec"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(ai_tutor_response_time_seconds_bucket[5m]))",
+            "legendFormat": "Response Time p95"
+          }
+        ]
+      }
+    ],
+    "templating": {
+      "list": [
+        {
+          "name": "datasource",
+          "type": "datasource",
+          "query": "prometheus",
+          "current": {
+            "text": "Prometheus",
+            "value": "Prometheus"
+          }
+        }
+      ]
+    },
+    "annotations": {
+      "list": [
+        {
+          "builtIn": 1,
+          "datasource": "-- Grafana --",
+          "enable": true,
+          "hide": true,
+          "iconColor": "rgba(0, 211, 255, 1)",
+          "name": "Annotations & Alerts",
+          "type": "dashboard"
+        }
+      ]
+    }
+  }
+}

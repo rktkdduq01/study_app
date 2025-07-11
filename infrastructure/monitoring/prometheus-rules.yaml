@@ -1,0 +1,189 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: monitoring
+data:
+  educational-rpg.rules.yaml: |
+    groups:
+      - name: educational_rpg_availability
+        interval: 30s
+        rules:
+          - alert: BackendDown
+            expr: up{job="educational-rpg-backend"} == 0
+            for: 2m
+            labels:
+              severity: critical
+              service: backend
+            annotations:
+              summary: "Backend service is down"
+              description: "Backend service {{ $labels.instance }} has been down for more than 2 minutes."
+
+          - alert: FrontendDown
+            expr: up{job="educational-rpg-frontend"} == 0
+            for: 2m
+            labels:
+              severity: critical
+              service: frontend
+            annotations:
+              summary: "Frontend service is down"
+              description: "Frontend service {{ $labels.instance }} has been down for more than 2 minutes."
+
+          - alert: HighErrorRate
+            expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.05
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High error rate detected"
+              description: "Error rate is above 5% for {{ $labels.job }} - current value: {{ $value }}"
+
+      - name: educational_rpg_performance
+        interval: 30s
+        rules:
+          - alert: HighResponseTime
+            expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High response time detected"
+              description: "95th percentile response time is above 2 seconds for {{ $labels.job }}"
+
+          - alert: HighCPUUsage
+            expr: rate(process_cpu_seconds_total[5m]) * 100 > 80
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High CPU usage"
+              description: "CPU usage is above 80% for {{ $labels.job }} on {{ $labels.instance }}"
+
+          - alert: HighMemoryUsage
+            expr: process_resident_memory_bytes / (1024 * 1024 * 1024) > 0.8
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High memory usage"
+              description: "Memory usage is above 800MB for {{ $labels.job }} on {{ $labels.instance }}"
+
+      - name: educational_rpg_database
+        interval: 30s
+        rules:
+          - alert: DatabaseConnectionPoolExhausted
+            expr: database_connection_pool_size - database_connection_pool_available < 5
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Database connection pool nearly exhausted"
+              description: "Less than 5 connections available in the pool for {{ $labels.job }}"
+
+          - alert: DatabaseHighLatency
+            expr: histogram_quantile(0.95, rate(database_query_duration_seconds_bucket[5m])) > 1
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High database query latency"
+              description: "95th percentile database query time is above 1 second"
+
+          - alert: DatabaseConnectionFailures
+            expr: rate(database_connection_errors_total[5m]) > 0.1
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Database connection failures"
+              description: "Database connection error rate is above 0.1/sec"
+
+      - name: educational_rpg_redis
+        interval: 30s
+        rules:
+          - alert: RedisDown
+            expr: redis_up == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Redis is down"
+              description: "Redis instance {{ $labels.instance }} has been down for more than 2 minutes"
+
+          - alert: RedisHighMemoryUsage
+            expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Redis high memory usage"
+              description: "Redis memory usage is above 90% on {{ $labels.instance }}"
+
+          - alert: RedisHighLatency
+            expr: redis_command_duration_seconds_p99 > 0.1
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Redis high latency"
+              description: "Redis command latency p99 is above 100ms"
+
+      - name: educational_rpg_business
+        interval: 1m
+        rules:
+          - alert: LowActiveUsers
+            expr: active_users_total < 10
+            for: 30m
+            labels:
+              severity: info
+            annotations:
+              summary: "Low active users"
+              description: "Active users count is below 10 for the last 30 minutes"
+
+          - alert: PaymentFailureRate
+            expr: rate(payment_failures_total[1h]) / rate(payment_attempts_total[1h]) > 0.1
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "High payment failure rate"
+              description: "Payment failure rate is above 10% - current value: {{ $value }}"
+
+          - alert: AITutorErrors
+            expr: rate(ai_tutor_errors_total[5m]) > 0.5
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "AI Tutor errors detected"
+              description: "AI Tutor error rate is above 0.5/sec"
+
+      - name: educational_rpg_security
+        interval: 30s
+        rules:
+          - alert: HighAuthFailureRate
+            expr: rate(auth_failures_total[5m]) > 10
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "High authentication failure rate"
+              description: "Authentication failure rate is above 10/sec - possible brute force attack"
+
+          - alert: RateLimitExceeded
+            expr: rate(rate_limit_exceeded_total[5m]) > 100
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High rate limit violations"
+              description: "Rate limit violations above 100/sec for {{ $labels.endpoint }}"
+
+          - alert: SuspiciousActivity
+            expr: rate(suspicious_activity_total[5m]) > 1
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Suspicious activity detected"
+              description: "Suspicious activity detected: {{ $labels.activity_type }}"

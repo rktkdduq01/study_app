@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  # Frontend React Application (Development Mode with Hot Reload)
+  frontend-dev:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: edurpg-frontend-dev
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_WS_URL=ws://localhost:8000
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend-dev
+    networks:
+      - edurpg-network
+    stdin_open: true
+    tty: true
+
+  # Backend FastAPI Application (Development Mode with Auto-reload)
+  backend-dev:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: edurpg-backend-dev
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@db:5432/edurpg
+      - JWT_SECRET_KEY=dev-secret-key
+      - CORS_ORIGINS=http://localhost:3000
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - db
+      - redis
+    networks:
+      - edurpg-network
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: edurpg-db-dev
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=edurpg
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - edurpg-network
+
+  # Redis for caching and real-time features
+  redis:
+    image: redis:7-alpine
+    container_name: edurpg-redis-dev
+    ports:
+      - "6379:6379"
+    networks:
+      - edurpg-network
+
+  # Adminer for database management
+  adminer:
+    image: adminer
+    container_name: edurpg-adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+    networks:
+      - edurpg-network
+
+networks:
+  edurpg-network:
+    driver: bridge
+
+volumes:
+  postgres_data_dev:
