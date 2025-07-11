@@ -129,7 +129,7 @@ jobs:
         continue-on-error: true
       
       - name: Upload vulnerability reports
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: dependency-vulnerability-reports
@@ -148,7 +148,7 @@ jobs:
         continue-on-error: true
       
       - name: Upload dependency scan results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: dependency-scan-results
@@ -195,7 +195,7 @@ jobs:
         continue-on-error: true
       
       - name: Upload code security results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: code-security-results
@@ -258,7 +258,7 @@ jobs:
         continue-on-error: true
       
       - name: Upload container scan results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: container-security-results
@@ -299,7 +299,7 @@ jobs:
         continue-on-error: true
       
       - name: Upload infrastructure scan results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: infrastructure-security-results
@@ -385,7 +385,7 @@ jobs:
           cat security-reports/security-summary.json
       
       - name: Upload consolidated security report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: consolidated-security-report
           path: security-reports/
