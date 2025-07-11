@@ -1,6 +1,6 @@
 # Multi-stage build for optimized React application
 # Stage 1: Dependencies
-FROM node:18-alpine as deps
+FROM node:24-alpine as deps
 
 # Install build tools for native dependencies
 RUN apk add --no-cache libc6-compat python3 make g++
@@ -14,7 +14,7 @@ COPY package*.json yarn.lock* ./
 RUN npm ci
 
 # Stage 2: Builder
-FROM node:18-alpine as builder
+FROM node:24-alpine as builder
 
 # Build arguments
 ARG VITE_API_URL
